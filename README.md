@@ -65,6 +65,25 @@ pip install -e ".[dev]"
 pytest
 ```
 
+## Running the real Phase 1 evaluation
+
+The verdict run uses real Dukascopy XAUUSD ticks. Download is resumable
+(cached per hour) and paced to survive a slow/rate-limited feed, then the
+evaluation runs the pre-registered protocol from `docs/phase1_criteria.md`:
+
+```bash
+# 1) fetch ~6 months into the cache (resumable; safe to re-run)
+python scripts/download_data.py 2025-01-01 2025-07-01 .cache/dukascopy
+
+# 2) run the pre-registered IS-grid -> single-OOS-pass evaluation
+python scripts/phase1_eval.py 2025-01-01 2025-07-01 .cache/dukascopy \
+    --out docs/phase1_results.md
+```
+
+`phase1_eval.py` refuses to produce a verdict if any hour is missing from
+the cache (pass `--allow-gaps` only for a labelled partial run), so a
+half-finished download can never masquerade as the real result.
+
 The suite includes the Phase 0 exit benchmark from the blueprint
 (`tests/test_stress_run.py`): a simulated stress run of hostile
 proposals — 50%-risk LLM requests, inverted stops, news-window entries,
