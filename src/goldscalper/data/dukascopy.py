@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import lzma
 import struct
+import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 XAUUSD_POINT = 0.001
@@ -71,27 +73,105 @@ def _cache_path(cache_dir: Path, symbol: str, hour: datetime) -> Path:
 
 
 def download_hour(
-    symbol: str, hour: datetime, cache_dir: str | Path, timeout: float = 30.0
+    symbol: str,
+    hour: datetime,
+    cache_dir: str | Path,
+    timeout: float = 60.0,
+    retries: int = 5,
 ) -> bytes:
     """Fetch one hour file, using the on-disk cache. A 404 (no data for
-    that hour) is cached and returned as empty bytes."""
+    that hour) is cached and returned as empty bytes. Transient network
+    failures (timeouts, resets) are retried with exponential backoff; the
+    proxy path to Dukascopy is slow and lossy, so this is expected."""
     path = _cache_path(Path(cache_dir), symbol, hour)
     if path.exists():
         return path.read_bytes()
 
     url = hour_url(symbol, hour)
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as err:
-        if err.code == 404:
-            raw = b""
-        else:
-            raise
+    last_err: Exception | None = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+            break
+        except urllib.error.HTTPError as err:
+            if err.code == 404:
+                raw = b""
+                break
+            last_err = err
+        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as err:
+            last_err = err
+        time.sleep(min(2 * (attempt + 1), 15))
+    else:
+        raise RuntimeError(f"download failed after {retries} tries: {url}") from last_err
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(raw)
     return raw
+
+
+def hours_in_range(start: datetime, end: datetime) -> list[datetime]:
+    start = start.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    end = end.astimezone(timezone.utc)
+    out = []
+    hour = start
+    while hour < end:
+        out.append(hour)
+        hour += timedelta(hours=1)
+    return out
+
+
+def missing_hours(
+    symbol: str, start: datetime, end: datetime, cache_dir: str | Path
+) -> list[datetime]:
+    """Hours in [start, end) not yet in the cache — the resume set."""
+    cache = Path(cache_dir)
+    return [
+        h
+        for h in hours_in_range(start, end)
+        if not _cache_path(cache, symbol, h).exists()
+    ]
+
+
+def download_range(
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    cache_dir: str | Path,
+    progress_cb: Callable[[int, int, datetime], None] | None = None,
+    pace_seconds: float = 0.0,
+    raise_on_fail: bool = True,
+) -> tuple[int, list[datetime]]:
+    """Pre-fetch every hour file in [start, end) into the cache, resuming
+    from whatever is already cached.
+
+    Resilient by default when `raise_on_fail=False`: a per-hour download
+    that exhausts its retries is recorded and skipped rather than
+    aborting the whole run, so a supervising loop can re-pass the
+    returned failures once the feed recovers. `pace_seconds` inserts a
+    delay after each *network* fetch (not cache hits) to stay under the
+    relay's rate limit. Returns (succeeded, failed_hours)."""
+    if start.tzinfo is None or end.tzinfo is None:
+        raise ValueError("start and end must be timezone-aware")
+    hours = hours_in_range(start, end)
+    total = len(hours)
+    done = 0
+    failed: list[datetime] = []
+    for i, hour in enumerate(hours):
+        cached = _cache_path(Path(cache_dir), symbol, hour).exists()
+        try:
+            download_hour(symbol, hour, cache_dir)
+            done += 1
+        except Exception:
+            if raise_on_fail:
+                raise
+            failed.append(hour)
+        if progress_cb is not None:
+            progress_cb(i + 1, total, hour)
+        if pace_seconds and not cached:
+            time.sleep(pace_seconds)
+    return done, failed
 
 
 def load_ticks(
