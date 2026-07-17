@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "goldscalper"
+version = "0.1.0"
+description = "Deterministic risk-gated XAUUSD trading framework (Phase 0: risk engine + journaling, no LLM in the hot path)"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+mt5 = ["MetaTrader5; sys_platform == 'win32'"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

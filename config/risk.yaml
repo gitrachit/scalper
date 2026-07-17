@@ -1,0 +1,15 @@
+# Live risk configuration. Version-controlled; every change goes through
+# a commit. LLM-proposed changes land in config/risk.staging.yaml and are
+# promoted here by a human only.
+default_risk_pct: 0.01
+max_risk_pct: 0.01
+min_stop_pips: 50.0
+max_stop_pips: 1000.0
+max_daily_loss_pct: 0.03
+max_trades_per_day: 5
+max_concurrent_positions: 2
+max_drawdown_pct: 0.10
+max_spread: 0.60
+news_blackout_minutes: 30
+news_currencies:
+  - USD
